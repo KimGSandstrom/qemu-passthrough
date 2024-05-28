@@ -8,18 +8,21 @@
 typedef struct NvidiaGpioGuestState NvidiaGpioGuestState;
 DECLARE_INSTANCE_CHECKER(NvidiaGpioGuestState, NVIDIA_GPIO_GUEST, TYPE_NVIDIA_GPIO_GUEST)
 
-#define HOST_DEVICE_PATH	"/dev/gpio-host"
+#define MEM_SIZE 0x600
+#define HOST_DEVICE_PATH "/dev/gpio-host"
+#define MESSAGE_SIZE 0x0200
 
-#define MEM_SIZE sizeof(struct tegra_gpio_op)
+/*
 // #define END_ADDR ( MEM_SIZE - 8 )			// last 64 bits to be written -- we assume alignment to 8 bytes
 #define END_ADDR ((MEM_SIZE-1) - ((MEM_SIZE-1) % 8))	// this define applies also when MEM_SIZE is not aligned
 
 _Static_assert( (MEM_SIZE % 8) == 0,  
-               "tegra_gpio_io not aligned to 64 bits\n");
+               "MEM_SIZE not aligned to 64 bits\n");
 _Static_assert( ((END_ADDR % 8) == 0) || END_ADDR < MEM_SIZE || END_ADDR < MEM_SIZE - 8 ,  
                "Other alignment failure\n");
 
 // qemu_log_mask(LOG_UNIMP, "%s: \n", __func__ );
+*/
 
 struct NvidiaGpioGuestState
 {
@@ -50,24 +53,23 @@ struct NvidiaGpioGuestState
 static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int size)
 {
 	struct NvidiaGpioGuestState *s = opaque;
-	// struct tegra_gpio_op *t = (void *)s->mem;
-	int n = size;
-	uint64_t mask = 0xff;
+	// int n = sizeof(data);
+	//uint64_t mask = 0xff;
 
 	if (addr >= MEM_SIZE)
 		return 0xDEADBEEF;
 
 	// mask read size
-	while ( n-- > 1) { mask |= (mask << 8); };
+	// while ( n-- > 1) { mask |= (mask << 8); };
 
 	// Cast buffer location as uint64_t
-	return *(uint64_t*)(&s->mem[addr]) & mask;
+	// return *(uint64_t*)(&s->mem[addr]) & mask;
+	return *(uint64_t*)(&s->mem[addr]);
 }
 
 static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, unsigned int size)
 {
 	struct NvidiaGpioGuestState *s = opaque;
-	// struct tegra_gpio_op *t = (void *)s->mem;
 	int ret; 
 
 	// int n = size;
@@ -87,18 +89,14 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 	// bulk of data is handled here
 	memcpy(&s->mem[addr], &data, size);
 
-	// check if it is the last 64-bit word being processed 
-	if (addr == END_ADDR) {
-		// Send the data to the host module -- s->mem is set up as tegra_gpio_op, we can use it directly
-		ret = write(s->host_device_fd, s->mem, sizeof(MEM_SIZE)); 
-		if (ret < 0) {
-			qemu_log_mask(LOG_UNIMP, "%s: Failed to write the host device..\n", __func__);
-			return;
-		}
-		// deal with return value as provided by host gpio driver
-		// we do not need to copy anything into s->mem because we use that pointer directly without copy
-		// guest driver must read return value from s->mem using memcpy_fromio(&io_data.value, mem_iova, sizeof(u32));
+    
+	// Send the data to the host module
+	ret = write(s->host_device_fd, s->mem, sizeof(MEM_SIZE)); 
+	if (ret < 0) {
+		qemu_log_mask(LOG_UNIMP, "%s: Failed to write the host device..\n", __func__);
+		return;
 	}
+
 	return;
 }
 
@@ -111,7 +109,6 @@ static const MemoryRegionOps nvidia_gpio_guest_ops = {
 static void nvidia_gpio_guest_instance_init(Object *obj)
 {
 	struct NvidiaGpioGuestState *s = NVIDIA_GPIO_GUEST(obj);
-	// struct tegra_gpio_op *t = (void *)s->mem;
 
 	/* allocate memory map region */
 	memory_region_init_io(&s->iomem, obj, &nvidia_gpio_guest_ops, s, TYPE_NVIDIA_GPIO_GUEST, MEM_SIZE);

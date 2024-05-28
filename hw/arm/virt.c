@@ -1054,7 +1054,7 @@ static void create_virtio_devices(const VirtMachineState *vms)
     nvidia_bpmp_guest_create(vms->memmap[VIRT_NVIDIA_BPMP_GUEST].base);
 
     /* Create NVIDIA GPIO guest passthru device, possibly need update ftd - WIP */
-    nvidia_bpmp_guest_create(vms->memmap[VIRT_NVIDIA_GPIO_GUEST].base);
+    nvidia_gpio_guest_create(vms->memmap[VIRT_NVIDIA_GPIO_GUEST].base);
 
     /* We create the transports in forwards order. Since qbus_realize()
      * prepends (not appends) new child buses, the incrementing loop below will
