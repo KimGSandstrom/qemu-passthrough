@@ -1,4 +1,5 @@
 # qemu-passthrough.nix
+# build with command: nix-build qemu-passthrough.nix
 { pkgs ? import <nixpkgs> {}, ... }:
 
 pkgs.stdenv.mkDerivation rec {
@@ -102,7 +103,8 @@ pkgs.stdenv.mkDerivation rec {
     --enable-virtfs-proxy-helper \
     --disable-dbus-display \
     --disable-docs \
-    --prefix=$out \
+    --docdir=./doc \
+    --prefix=$out
   '';
   /*
    --sysconfdir=${lib}$(if isDebug then "/debug" else "") \

@@ -1,4 +1,5 @@
 #include "qemu/osdep.h"
+#include "qemu/qemu-print.h"
 #include "qemu/log.h"
 #include "qapi/error.h" /* provides error_fatal() handler */
 #include "hw/sysbus.h"	/* provides all sysbus registering func */
@@ -10,7 +11,6 @@ DECLARE_INSTANCE_CHECKER(NvidiaGpioGuestState, NVIDIA_GPIO_GUEST, TYPE_NVIDIA_GP
 
 #define MEM_SIZE 0x600
 #define HOST_DEVICE_PATH "/dev/gpio-host"
-#define MESSAGE_SIZE 0x0200
 
 /*
 // #define END_ADDR ( MEM_SIZE - 8 )			// last 64 bits to be written -- we assume alignment to 8 bytes
@@ -50,11 +50,12 @@ struct NvidiaGpioGuestState
 //  2. Start operation by writing mrq opcode to address 0x0500
 //  3. Read ret code from 0x0410 and response data from the buffers
 
+
 static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int size)
 {
 	struct NvidiaGpioGuestState *s = opaque;
 	// int n = sizeof(data);
-	//uint64_t mask = 0xff;
+	// uint64_t mask = 0xff;
 
 	if (addr >= MEM_SIZE)
 		return 0xDEADBEEF;
@@ -67,36 +68,68 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
 	return *(uint64_t*)(&s->mem[addr]);
 }
 
+/*
+ *   void *opaque:       This is a pointer to opaque data associated with the memory region. 
+ *                       It is typically used to pass additional context or information to the callback function. 
+ *                       In this case, it can be used to access device-specific data structures or state 
+ *                       information required for handling the write operation.
+ *
+ *   hwaddr addr:        This parameter represents the hardware address or the offset within the memory region 
+ *                       where the write operation is taking place. It specifies the location where the data should be written.
+ * 
+ *   uint64_t data:      This parameter holds the data that needs to be written to the memory region. 
+ *                       It represents the value that will be stored at the specified address (addr).
+ *
+ *   unsigned int size:  This parameter indicates the size of the data being written, in bytes. It specifies the number of bytes 
+ *                       to be written starting from the given address.
+ */
 static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, unsigned int size)
 {
-	struct NvidiaGpioGuestState *s = opaque;
-	int ret; 
+	NvidiaGpioGuestState *s = opaque;
+	int ret;
+    // TODO move to opaque memory to avoid memory collision
+    static unsigned char *msg, *prt_msg;
+    static unsigned char length;
+    unsigned char *mask;
 
-	// int n = size;
-	//uint64_t mask = 0xff;
+    // uint8_t test16[16] = { 0xFA, 0xCE, 0xBE, 0xEF, 0xBE, 0xD0, 0xFA, 0xCE, 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x20 };  // 16 bytes
+    // uint8_t test8[8] = { 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x10 };  // 8 bytes
+    // uint8_t test4[4] = { 0xBE, 0xEF, 0xDD, 0x08 };  // 4 bytes
 
-	// mask write size
-	/* redundant
-	while ( n-- > 1) { mask |= (mask << 8) };
-	data &= mask;
-	*/
+    qemu_printf("qemu: addr %ld, data: 0x%016lX, size: %d\n", addr, data, size);
 
-	if (addr >= MEM_SIZE){
-		qemu_log_mask(LOG_UNIMP, "qemu: Error addr >= MEM_SIZE in 0x%lX data: 0x%lX\n", addr, data);
+    if(addr == 0) {
+        msg = malloc(length);
+	    memset(msg, 0, length);
+        mask = (unsigned char *)&data;
+        length = (*mask & 0xFE) >> 1; // length is 7 top MSB bits in first byte
+        qemu_printf("qemu: case 0x00, length: 0x%X\n", length);
+    }
+
+	if (addr > length - size){
+        qemu_printf("qemu: Error addr (%ld) > length (%d)- size (%d)\n", addr, length, size);
+		qemu_log_mask(LOG_UNIMP, "qemu: Error addr (%ld) > length (%d)- size (%d)\n", addr, length, size);
 		return;
 	}
 
-	// bulk of data is handled here
-	memcpy(&s->mem[addr], &data, size);
+    memcpy(msg + addr, &data, size);
+    qemu_printf("memcpy: 0x%08X, size: %d\n", *(uint16_t *)(msg + addr), size);
 
-    
-	// Send the data to the host module
-	ret = write(s->host_device_fd, s->mem, sizeof(MEM_SIZE)); 
-	if (ret < 0) {
-		qemu_log_mask(LOG_UNIMP, "%s: Failed to write the host device..\n", __func__);
-		return;
-	}
-
+    if(addr == length - size) {
+        *msg = *msg & 0x01;   // remove lenght data from message
+        qemu_printf("msg: 0x");
+        for(prt_msg = msg + length - 1; prt_msg >= msg; prt_msg--) qemu_printf("%02X", *prt_msg);
+        qemu_printf("\n");
+        ret = write(s->host_device_fd, msg, length);  // Send the data to the host module
+        // ret = write(s->host_device_fd, test4, 4);  // Send test data
+        free(msg);
+        if (ret < 0)
+        {
+            qemu_log_mask(LOG_UNIMP, "%s: Failed to write the host device..\n", __func__);
+            return;
+        }
+        // memcpy(&s->mem[8], &msg[8], 8);
+    }
 	return;
 }
 
