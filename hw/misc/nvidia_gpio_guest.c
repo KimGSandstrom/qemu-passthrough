@@ -42,9 +42,6 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
     else
         qemu_printf("qemu: (in nvidia_gpio_guest_read) %ld return_value: 0x%08lX\n", ret, return_value);
 
-	// Cast buffer location as uint64_t
-	// return *(uint64_t*)(&s->mem[addr]) & mask;
-	// return *(uint64_t*)(&s->mem[addr]);
     return return_value;
 }
 
@@ -71,8 +68,7 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
     static unsigned char *prt_msg;
     static unsigned char length;
     unsigned char *mask;
-    int return_value;
-    // struct iovec retval;
+    // int return_value;
 
     // uint8_t test16[16] = { 0xFA, 0xCE, 0xBE, 0xEF, 0xBE, 0xD0, 0xFA, 0xCE, 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x20 };  // 16 bytes
     // uint8_t test8[8] = { 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x10 };  // 8 bytes
@@ -80,7 +76,6 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 
 
     if(addr == 0) {
-        // s->mem = malloc(length);
 	    memset(s->mem, 0, length);
         mask = (unsigned char *)&data;
         length = (*mask & 0xFE) >> 1; // length is 7 top MSB bits in first byte
@@ -111,10 +106,10 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
             qemu_log_mask(LOG_UNIMP, "%s: Failed to write the host device..\n", __func__);
             return;
         }
-
+        /*
         memcpy(&return_value, s->mem, sizeof(return_value));
         qemu_printf("qemu: (in nvidia_gpio_guest_write) return_value: 0x%08X\n", return_value);
-        // free(s->mem);
+        */
     }
 	return;
 }
