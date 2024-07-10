@@ -28,6 +28,8 @@ uint64_t *return_value = (uint64_t *)return_buffer;
 static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int size)
 {
 	struct NvidiaGpioGuestState *s = opaque;
+    uint64_t mask = (0x0000000000000001 << (size << 3)) - 1;
+    /*
     int ret;
     // ssize_t ret;
     // uint64_t return_value = 0x0BEDFACEDEADBEEF
@@ -35,6 +37,9 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
     // if(read(s->host_device_fd, s->mem + addr, size) < 0) { 
     if((ret = read(s->host_device_fd, return_buffer + addr, size)) < 0) { 
         qemu_printf("qemu: (in nvidia_gpio_guest_read) *error* read error %d, addr: 0x%lX, size %d\n", ret, addr, size);
+    uint64_t mask = (0x0000000000000001 << (size << 3)) - 1;
+    uint64_t mask = (0x0000000000000001 << (size << 3)) - 1;
+    uint64_t mask = (0x0000000000000001 << (size << 3)) - 1;
     }
     else
     {
@@ -42,9 +47,14 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
         // qemu_printf("qemu: (in nvidia_gpio_guest_read) %ld return_value: 0x%08X\n", ret, *(uint32_t *)s->mem);
     }
     qemu_printf("qemu: (in nvidia_gpio_guest_read) read chardev, addr = %ld, size = %d, *(uint32_t *)s->mem = 0x%08X\n", addr, size, *(uint32_t *)s->mem);
+    */
+    if( size > sizeof(uint64_t)) {
+        qemu_printf("qemu: (nvidia_gpio_guest_read) size error in read\n");
+        return 0x0BEDFACE1234BEEF;
+    }
 
     // we could add a mask to the return value
-	return *(uint64_t*)&s->mem[addr];
+	return *(uint64_t*)&s->mem[addr] & mask;
 }
 
 /*
@@ -65,7 +75,7 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
 static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, unsigned int size)
 {
 	NvidiaGpioGuestState *s = opaque;
-    // TODO move to opaque memory to avoid memory collision
+    int ret;
     static unsigned char *prt_msg;
     static unsigned char length;
     // int return_value;
@@ -73,15 +83,16 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
     // uint8_t test16[16] = { 0xFA, 0xCE, 0xBE, 0xEF, 0xBE, 0xD0, 0xFA, 0xCE, 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x20 };  // 16 bytes
     // uint8_t test8[8] = { 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x10 };  // 8 bytes
     // uint8_t test4[4] = { 0xBE, 0xEF, 0xDD, 0x08 };  // 4 bytes
+    // uint8_t free_line8[4] = { 0x01,'f',0x00,0x08 };
 
+    qemu_printf("qemu: (write) addr %ld, data: 0x%016lX, size: %d\n", addr, data, size);
 
     if(addr == 0) {
 	    memset(s->mem, 0, length);
         length = (*(unsigned char *)&data & 0xFE) >> 1;                 // length is 7 top MSB bits in first byte
         *(unsigned char *)&data = *(unsigned char *)&data & 0x01;    // remove lenght data from message
-        qemu_printf("qemu: (write first segment) length: 0x%X\n", length);
+        qemu_printf("qemu: ( ---- write first segment ---- ) length: 0x%X, signal: \'%c\'\n", length, s->mem[1]);
     }
-    qemu_printf("qemu: (write) addr %ld, data: 0x%016lX, size: %d\n", addr, data, size);
 
 	if (addr > length - size){
 		qemu_printf("qemu: **Error** addr (%ld) > length (%d)- size (%d)\n", addr, length, size);
@@ -89,23 +100,21 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 	}
 
     memcpy(s->mem + addr, &data, size);
-    qemu_printf("qemu: memcpy, 0x%08X, size: %d\n", *(uint16_t *)(s->mem + addr), size);
+    qemu_printf("qemu: data, 0x%lX, size: %d\n", data & ((0x0000000000000001 << (size << 3)) - 1), size);
 
     // writeing last block
     if(addr == length - size) {
-        qemu_printf("qemu: (write last segment) length = %d, hex: ", length);
+        qemu_printf("qemu: ( ++++ write last segment ++++ ) length = %d, hex: ", length);
         for(prt_msg = s->mem; prt_msg < s->mem + length; prt_msg++) qemu_printf("%02X ", *prt_msg);
         qemu_printf("\n");
-        // Send the data to the host module
-        if (write(s->host_device_fd, s->mem, length) < 0)
+        if ( (ret = write(s->host_device_fd, s->mem, length)) < 0)
         {
-            qemu_printf("%s: Failed to write the host device..\n", __func__);
+            qemu_printf("%s: Failed to write the host device. ret = 0x%X\n", __func__, ret);
             return;
         }
-
         // seems to copy exactly what we wrote -- not the return value
-        memcpy(return_value, s->mem, sizeof(*return_value));
-        qemu_printf("qemu: (in nvidia_gpio_guest_write) return_value: 0x%016lX\n", *return_value);
+        // memcpy(return_value, s->mem, sizeof(*return_value));
+        // qemu_printf("qemu: (in nvidia_gpio_guest_write) return_value: 0x%016lX\n", *return_value);
     }
 	return;
 }
