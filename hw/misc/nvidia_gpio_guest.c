@@ -55,7 +55,7 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
     */
 
     retval = ( return_value >> (addr << 3) ) & mask;
-    qemu_printf("qemu: (read) addr: %ld, size: %d, mask: 0x%016lX, return_value: 0x%016lX, retval: 0x%016lX\n", addr, size, mask, return_value, retval);
+    // qemu_printf("qemu: (read) addr: %ld, size: %d, mask: 0x%016lX, return_value: 0x%016lX, retval: 0x%016lX\n", addr, size, mask, return_value, retval);
 	return retval;
 }
 
@@ -86,14 +86,14 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
     // uint8_t test4[4] = { 0xBE, 0xEF, 0xDD, 0x08 };  // 4 bytes
     // uint8_t free_line8[4] = { 0x01,'f',0x00,0x08 };
 
-    qemu_printf("qemu: (write) addr %ld, data: 0x%016lX, size: %d\n", addr, data, size);
-
     if(addr == 0) {
 	    memset(s->mem, 0, length);
         length = (*(unsigned char *)&data & 0xFE) >> 1;                 // length is 7 top MSB bits in first byte
         *(unsigned char *)&data = *(unsigned char *)&data & 0x01;    // remove lenght data from message
-        qemu_printf("qemu: ( ---- write first segment ---- ) length: 0x%Xn\n", length);
+        qemu_printf("qemu: ( ---- write first segment ---- ) length: 0x%X\n", length);
     }
+
+    // qemu_printf("qemu: (write) addr %ld, data: 0x%016lX, size: %d\n", addr, data, size);
 
 	if (addr > length - size){
 		qemu_printf("%s: **Error** addr (%ld) > length (%d)- size (%d)\n", __func__, addr, length, size);
