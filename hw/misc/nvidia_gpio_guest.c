@@ -9,8 +9,9 @@
 typedef struct NvidiaGpioGuestState NvidiaGpioGuestState;
 DECLARE_INSTANCE_CHECKER(NvidiaGpioGuestState, NVIDIA_GPIO_GUEST, TYPE_NVIDIA_GPIO_GUEST)
 
-#define MEM_SIZE 0x18       // mem size in bytes
-#define RETURN_OFF 0x10/8	// offset for return value is two 64 bit words
+#define MEM_SIZE 0x18       // mem size in bytes is 3 64 bit words
+#define RETURN_OFF 0x10	// offset (in bytes) for return value is two 64 bit words
+// #define RETURN_OFF 0
 #define HOST_DEVICE_PATH "/dev/gpio-host"
 
 struct NvidiaGpioGuestState
@@ -19,12 +20,12 @@ struct NvidiaGpioGuestState
 	MemoryRegion iomem;
 	int host_device_fd;
 	uint8_t mem[MEM_SIZE];
+    unsigned char length;
+    int written;
+    uint64_t return_value;
 };
 
-// static unsigned char return_buffer[MEM_SIZE];  // using same size as input buffer 
-// static uint64_t *return_value = (uint64_t *)return_buffer;
-// static int return_size = 0;
-static uint64_t return_value;
+pthread_mutex_t io_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Device memory: 0x090c1000 +  /* Base address */
 
@@ -34,7 +35,7 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
 	NvidiaGpioGuestState *s = opaque;
 
 	if (addr >= MEM_SIZE)
-		return 0xDEADBEEF;
+		return 0xABEDFACE;
 
     qemu_printf("%s: return: 0x%016lX, addr: 0x%lX, size: %d\n", __func__, *(uint64_t*)&s->mem[addr], addr, size);
 	// Cast buffer location as uint64_t
@@ -42,24 +43,31 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
 }
 */
 
+static inline ssize_t safe_read(int fd, void *buf, size_t count) {
+    ssize_t ret;
+    pthread_mutex_lock(&io_mutex); // Use io_mutex for read as well
+    ret = read(fd, buf, count);
+    pthread_mutex_unlock(&io_mutex);
+    return ret;
+}
+
 static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int size)
 {
 	struct NvidiaGpioGuestState *s = opaque;
     uint64_t mask = ( (uint64_t)0x0000000000000001 << (size << 3) ) - 1;
-    uint64_t retval;
+    uint64_t retval = ( s->return_value >> (addr<<3) ) & mask;
     int i;
 
-    if( size > sizeof(uint64_t) ) {
-        qemu_printf("%s: **Error** size error in read\n", __func__);
-        return 0x0BEDFACE1234BEEF;
-    }
-    if( addr + size > MEM_SIZE) {
+    qemu_printf("qemu: ( +++ read     ) addr: %ld, size: %d, 3rd_word: 0x%016lX, return_value: 0x%016lX\n", addr, size, *((uint64_t *)s->mem + RETURN_OFF), s->return_value);
+
+    if( size + addr > MEM_SIZE ) {
         qemu_printf("%s: **Error** address overflow, addr: 0x%lX, size: %d\n", __func__, addr, size);
+        return 0x01234567ABEDFACE;
     }
 
     // Get the data from the host module
     // if(read(s->host_device_fd, s->mem + addr, size) < 0) { 
-//    if((ret = read(s->host_device_fd, return_buffer + addr, size)) < 0) { 
+//    if((ret = safe_read(s->host_device_fd, return_buffer + addr, size)) < 0) { 
 //        qemu_printf("qemu: (in nvidia_gpio_guest_read) *error* read error %d, addr: 0x%lX, size %d\n", ret, addr, size);
 //    }
 //    else
@@ -73,14 +81,16 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
     // for(i=0; i<MEM_SIZE/8; i++)
     //    qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)return_buffer+i)) ;
 
-    qemu_printf("qemu: ( read ) addr = %ld, addr, dump s->mem:\n", addr);
-    for(i=0; i<MEM_SIZE/8; i++)
-        qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)s->mem+i)) ;
+    if( addr == 0 ) {
+        qemu_printf("qemu: (    read     ) addr = %ld, addr, dump s->mem:\n", addr);
+        for(i=0; i<MEM_SIZE/sizeof(uint64_t); i++)
+            qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)s->mem+i)) ;
+    }
 
     // our total retval memspace is 64 bits -- third word in return_value
-    // retval = ( *((uint64_t *)s->mem + RETURN_OFF) >> (addr << 3) ) & mask;
-    retval = ( return_value >> (addr << 3) ) & mask;
-    qemu_printf("qemu: ( read ) addr: %ld, size: %d, return_value: 0x%016lX, mask: 0x%016lX, retval(processed): 0x%016lX\n", addr, size, return_value, mask, retval);
+    // retval = *((uint64_t *)(s->mem + addr)) & mask;
+    // retval = ( return_value >> (addr<<3) ) & mask;
+    qemu_printf("qemu: (    read --- ) mask: 0x%lX, -------- retval(processed): 0x%016lX\n", mask, retval);
 	return retval;
 }
 
@@ -99,59 +109,78 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
  *   unsigned int size:  This parameter indicates the size of the data being written, in bytes. It specifies the number of bytes 
  *                       to be written starting from the given address.
  */
+
+static inline ssize_t safe_write(int fd, const void *buf, size_t count) {
+    ssize_t ret;
+    pthread_mutex_lock(&io_mutex);
+    ret = write(fd, buf, count);
+    pthread_mutex_unlock(&io_mutex);
+    return ret;
+}
+
 static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, unsigned int size)
 {
 	NvidiaGpioGuestState *s = opaque;
-    int ret, i;
-    static unsigned char *prt_msg;
-    static unsigned char length;
-
-    // uint8_t test16[16] = { 0xFA, 0xCE, 0xBE, 0xEF, 0xBE, 0xD0, 0xFA, 0xCE, 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x20 };  // 16 bytes
-    // uint8_t test8[8] = { 0xDE, 0xAD, 0xFA, 0xCE, 0xBE, 0xEF, 0xDD, 0x10 };  // 8 bytes
-    // uint8_t test4[4] = { 0xBE, 0xEF, 0xDD, 0x08 };  // 4 bytes
-    // uint8_t free_line8[4] = { 0x01,'f',0x00,0x08 };
+    int ret = 0, i;
+    uint64_t mask;
 
     if(addr == 0) {
-	    memset(s->mem, 0, length);
-        length = (*(unsigned char *)&data & 0xFE) >> 1;              // length is 7 top MSB bits in first byte
+        // print debug
+        qemu_printf("qemu: ( +++ write     ) addr: %ld, size: %d, data: 0x%016lX\n", addr, size, data);
+
+        s->length = (*(unsigned char *)&data & 0xFE) >> 1;              // s->length is 7 top MSB bits in first byte
         *(unsigned char *)&data = *(unsigned char *)&data & 0x01;    // remove lenght data from message
-        // qemu_printf("qemu: ( ---- write first segment ---- ) length: 0x%X\n", length);
+	    memset(s->mem, 0, s->length);
+        s->return_value = -1;
+        s->written = 0;
     }
 
-	if (addr > length - size){
-		qemu_printf("%s: **Error** addr (%ld) > length (%d)- size (%d)\n", __func__, addr, length, size);
+	if (addr > s->length - size){
+		qemu_printf("%s: **Error** addr (%ld) > s->length (%d)- size (%d)\n", __func__, addr, s->length, size);
 		return;
 	}
 
+    // accumulate message
     memcpy(s->mem + addr, &data, size);
 
     // writeing last block
-    if(addr == length - size) {
-        qemu_printf("qemu: ( write ++++ ) signal: \'%c\', length = %d, hex: ", s->mem[1], length);
-        for(prt_msg = s->mem; prt_msg < s->mem + length; prt_msg++) qemu_printf("%02X ", *prt_msg);
-        qemu_printf("\n");
-        if( s->mem[1] != '<' && s->mem[1] != '>' && s->mem[1] != 'B') {
-        if ( (ret = write(s->host_device_fd, s->mem, length)) < 0)
-        {
-            qemu_printf("%s: **Error** Failed to write the host device. ret = 0x%X\n", __func__, ret);
-            return;
-        }
+    if(addr == s->length - size) {
+        // print debug
+        qemu_printf("qemu: (     write     ) signal: \'%c\', s->length = %d, hexdump:\n", s->mem[1], s->length);
+        for(i = 0; i < (s->length + 7)/8; i++)
+            qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)(s->mem+i))) ;
+
+        // debug exception
+        // if( s->length > 0x18 || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '<' || s->mem[1] == '>' || s->mem[1] == 'B') {
+        if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '<' || s->mem[1] == '>' ) { // block writel and obvious errors only
+          s->return_value = 0xF1F2F3F4F5F6F7F8;
+          qemu_printf("operation \'%c\' was blocked for debug (chip=%d)\n", s->mem[1], s->mem[0]);
         }
         else {
-            qemu_printf("operation was blocked for debug\n");
+
+        while( ret >=0 && s->written < s->length )
+        if ( (ret = safe_write(s->host_device_fd, s->mem + s->written, s->length - s->written)) < 0 )
+        {
+            s->return_value = 0xFACEDEAF;
+            qemu_printf("%s: **Error** 0x%02X, Failed to write the host device\n", __func__, errno);
+        }
+        else {
+            qemu_printf("%s: **Success** writing the host device\n", __func__);
+            s->written += ret;
+            if ( s->written != s->length*8 ) {
+                qemu_printf("%s: **Warning** Only %d bytes of %d, are written to host\n", __func__, s->written, s->length);
+            }
+            else {
+                // we get the return values here one word of return should be enough (copying less saves no or little CPU)
+                // note: we dont actually know the real size of the return value
+                mask = ( (uint64_t)0x0000000000000001 << (s->length << 3) ) - 1;
+                s->return_value = *(uint64_t *)(s->mem + RETURN_OFF) & mask;
+            }
         }
 
-        qemu_printf("qemu: ( write ) dump s->mem:\n");
-        for(i=0; i<MEM_SIZE/8; i++)
-            qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)s->mem+i)) ;
-
-        // we get the return values here one word of return should be enough (copying less saves no or little CPU)
-        // note: we dont actually know the real size of the return value
-//        *return_value = *((uint64_t *)s->mem + RETURN_OFF);
-//        return_size = sizeof(*return_value);
-        // memcpy(return_value, (uint64_t *)s->mem + RETURN_OFF, sizeof(*return_value));
-        return_value = *((uint64_t *)s->mem + RETURN_OFF);
-        qemu_printf("qemu: ( write ) return_value: 0x%016lX\n", *((uint64_t *)s->mem + RETURN_OFF));
+        } // close debug
+        
+        qemu_printf("qemu: (     write --- ) return_value: 0x%016lX\n", s->return_value);
     }
 	return;
 }
