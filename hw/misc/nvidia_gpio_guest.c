@@ -65,31 +65,22 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
         return 0x01234567ABEDFACE;
     }
 
-    // Get the data from the host module
-    // if(read(s->host_device_fd, s->mem + addr, size) < 0) { 
-//    if((ret = safe_read(s->host_device_fd, return_buffer + addr, size)) < 0) { 
-//        qemu_printf("qemu: (in nvidia_gpio_guest_read) *error* read error %d, addr: 0x%lX, size %d\n", ret, addr, size);
-//    }
-//    else
-//    {
-//        qemu_printf("qemu: (in nvidia_gpio_guest_read) return_value: 0x%08lX, addr: 0x%lX, size %d\n", *return_value, addr, size);
-        // qemu_printf("qemu: (in nvidia_gpio_guest_read) %ld return_value: 0x%08X\n", ret, *(uint32_t *)s->mem);
-//    }
-    // qemu_printf("qemu: (in nvidia_gpio_guest_read) read chardev, addr = %ld, size = %d, *(uint32_t *)s->mem = 0x%08X\n", addr, size, *(uint32_t *)s->mem);
-
-    // qemu_printf("qemu: ( read ) dump return_buffer:\n");
-    // for(i=0; i<MEM_SIZE/8; i++)
-    //    qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)return_buffer+i)) ;
+    // // Get the data from the host module
+    // // if(read(s->host_device_fd, s->mem + addr, size) < 0) { 
+    // if((ret = safe_read(s->host_device_fd, s->return_buffer + addr, size)) < 0) { 
+    //    qemu_printf("qemu: (in nvidia_gpio_guest_read) *error* read error %d, addr: 0x%lX, size %d\n", ret, addr, size);
+    // }
+    // else
+    // {
+    //    qemu_printf("qemu: (in nvidia_gpio_guest_read) return_value: 0x%08lX, addr: 0x%lX, size %d\n", s->return_value, addr, size);
+    // }
 
     if( addr == 0 ) {
-        qemu_printf("qemu: (    read     ) addr = %ld, addr, dump s->mem:\n", addr);
+        qemu_printf("qemu: (    read     ) addr = %ld, dump s->mem:\n", addr);
         for(i=0; i<MEM_SIZE/sizeof(uint64_t); i++)
-            qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)s->mem+i)) ;
+            qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)s->mem+i));
     }
 
-    // our total retval memspace is 64 bits -- third word in return_value
-    // retval = *((uint64_t *)(s->mem + addr)) & mask;
-    // retval = ( return_value >> (addr<<3) ) & mask;
     qemu_printf("qemu: (    read --- ) mask: 0x%lX, -------- retval(processed): 0x%016lX\n", mask, retval);
 	return retval;
 }
@@ -152,29 +143,32 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 
         // debug exception
         // if( s->length > 0x18 || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '<' || s->mem[1] == '>' || s->mem[1] == 'B') {
-        if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '<' || s->mem[1] == '>' ) { // block writel and obvious errors only
-          s->return_value = 0xF1F2F3F4F5F6F7F8;
-          qemu_printf("operation \'%c\' was blocked for debug (chip=%d)\n", s->mem[1], s->mem[0]);
+        // if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '<' || s->mem[1] == '>' ) { // block readl/writel and obvious errors only
+        if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20) { // block obvious errors only
+          s->return_value = 0xDEADBEEF;
+          qemu_printf("operation \'%c\' was blocked (chip=%d)\n", s->mem[1], s->mem[0]);
         }
         else {
 
         while( ret >=0 && s->written < s->length )
         if ( (ret = safe_write(s->host_device_fd, s->mem + s->written, s->length - s->written)) < 0 )
         {
-            s->return_value = 0xFACEDEAF;
+            s->return_value = 0x1BADFACE;
             qemu_printf("%s: **Error** 0x%02X, Failed to write the host device\n", __func__, errno);
         }
         else {
             qemu_printf("%s: **Success** writing the host device\n", __func__);
             s->written += ret;
-            if ( s->written != s->length*8 ) {
-                qemu_printf("%s: **Warning** Only %d bytes of %d, are written to host\n", __func__, s->written, s->length);
-            }
-            else {
+            if ( s->written > RETURN_OFF && s->written <= RETURN_OFF + sizeof(uint64_t) ) {
                 // we get the return values here one word of return should be enough (copying less saves no or little CPU)
-                // note: we dont actually know the real size of the return value
-                mask = ( (uint64_t)0x0000000000000001 << (s->length << 3) ) - 1;
+                // note: the real size of the return value is (s->written - RETURN_OFF), should be 4 or 8 bytes
+                mask = ( (uint64_t)0x0000000000000001 << ((s->written - RETURN_OFF) << 3) ) - 1;
                 s->return_value = *(uint64_t *)(s->mem + RETURN_OFF) & mask;
+            }
+            else if ( s->written != s->length ) {
+                // This warning can trigger if host fakes the number of bytes read
+                qemu_printf("%s: **Warning** %d bytes of %d, were written to host\n", __func__, s->written, s->length);
+                s->return_value = 0x2BADFACE;
             }
         }
 
