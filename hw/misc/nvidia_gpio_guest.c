@@ -63,7 +63,6 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
 	struct NvidiaGpioGuestState *s = opaque;
     uint64_t mask = ( size >= 8) ? (uint64_t)0xFFFFFFFFFFFFFFFF : ( (uint64_t)0x0000000000000001 << (size << 3) ) - 1;
     uint64_t retval = ( s->return_value >> (addr<<3) ) & mask;
-    // int i;
   
     qemu_printf("qemu: (   + read     ) written: %d: addr: %ld, size: %d, return_value: 0x%016lX\n", s->written, addr, size, s->return_value);
 
@@ -137,13 +136,15 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
         s->written = 0;
         s->towrite = 0;
         // print debug
-        qemu_printf("qemu: ( +++ write +++ ) addr: %ld, size: %d, data: 0x%016lX, length (from msg): %d\n", addr, size, data, s->length);
+        qemu_printf("qemu: ( +++ write +++ ) length (from msg): %d\n", s->length);
     }
 
-		if (addr > s->length - size){
-			qemu_printf("%s: **Error** addr (%ld) > s->length (%d)- size (%d)\n", __func__, addr, s->length, size);
-			return;
-		}
+    qemu_printf("qemu: (     write     ) addr: %ld, size: %d, data: 0x%016lX\n", addr, size, data);
+
+    if (addr > s->length - size){
+        qemu_printf("%s: **Error** addr (%ld) > s->length (%d)- size (%d)\n", __func__, addr, s->length, size);
+        return;
+    }
 
     // accumulate message
     memcpy(s->mem + addr, &data, size);
@@ -152,13 +153,17 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
     // writeing last block
     if(addr == s->length - size) {
         // print debug
-        qemu_printf("qemu: (     write     ) hexdump:\n");
+        qemu_printf("qemu: (     write     ) signal \'%c\', hexdump:\n", s->mem[1]);
         for(i = 0; i < (s->towrite + 7)/8; i++)
-        		qemu_printf("    (%d) 0x%016lX\n", i, *((uint64_t *)(s->mem+i)));
+        		qemu_printf("\t\t\t\t(%d) 0x%016lX\n", i, *((uint64_t *)(s->mem+i)));
 
+        #ifdef DEBUG_BLOCK
+        if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '>' ) { // debug: block writel
+        #else
         if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20) { // block obvious errors only
+        #endif
             s->return_value = 0xDEADFACE;
-            qemu_printf("operation \'%c\' was blocked (chip=%d)\n", s->mem[1], s->mem[0]);
+            qemu_printf("signal \'%c\' was blocked (chip=%d)\n", s->mem[1], s->mem[0]);
         }
         else {
 
@@ -166,6 +171,7 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
                 qemu_printf("%s: **Error** Size error in write %d of %d\n", __func__, s->towrite, s->length);
                 return;
             }
+            
             pthread_mutex_lock(&return_mutex);
             qemu_printf("qemu: (     write     ) +++locked+++ return mutex\n");
             qemu_printf("qemu: (     write     ) Ready to write, (%d)\n", s->towrite);
@@ -180,7 +186,7 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
                 qemu_printf("qemu: **Success** writing (%d) signal \'%c\' to the host device\n", ret, s->mem[1]);
                 // in addition to written length, 'ret' contains also the count of returned bytes appended to the end of the buffer
                 // note: the size of the return value is (s->written - RETURN_OFF), should be 4 or 8 bytes
-                s->written = ret;           // update 'written' to actually written bytes ('ret' may be altered by host's return value)
+                s->written = ret;           // update 'written' to actually written bytes ('ret'|| may be altered by host's return value)
                 s->written -= RETURN_OFF;   // begin to handle return, subtract return offset to get expected return size
                 qemu_printf("qemu: (     write     ) Expected return size: %d\n", s->written);
                 if ( s->written > 0 && s->written <= RETURN_SIZE ) {
@@ -192,12 +198,12 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
                 }
                 else {
                 		// no return value
-                    if ( ret < s->length ) {       // size check after write (ret may be larger because of return)
+                    if ( ret < s->length ) {       // size check after write at least 'length' must be written (return padding may occur)
                         qemu_printf("%s: **Warning** %d bytes of %d, were written to host\n", __func__, s->written, s->length);
                         s->return_value = 0x2BADFACE;
+                    }
                     pthread_mutex_unlock(&return_mutex);    // allow next message
                     qemu_printf("qemu: (     write     ) ---unlocked--- @error return mutex\n");
-                    }
                 }
             }
 
