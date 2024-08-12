@@ -83,6 +83,8 @@
 #include "hw/virtio/virtio-md-pci.h"
 #include "hw/virtio/virtio-iommu.h"
 #include "hw/char/pl011.h"
+#include "hw/misc/nvidia_bpmp_guest.h"
+#include "hw/misc/nvidia_gpio_guest.h"
 #include "qemu/guest-random.h"
 
 static GlobalProperty arm_virt_compat[] = {
@@ -176,6 +178,8 @@ static const MemMapEntry base_memmap[] = {
     [VIRT_NVDIMM_ACPI] =        { 0x09090000, NVDIMM_ACPI_IO_LEN},
     [VIRT_PVTIME] =             { 0x090a0000, 0x00010000 },
     [VIRT_SECURE_GPIO] =        { 0x090b0000, 0x00001000 },
+    [VIRT_NVIDIA_BPMP_GUEST] =	{ 0x090c0000, 0x00001000 },
+    [VIRT_NVIDIA_GPIO_GUEST] =	{ 0x090c1000, 0x00001000 },
     [VIRT_MMIO] =               { 0x0a000000, 0x00000200 },
     /* ...repeating for a total of NUM_VIRTIO_TRANSPORTS, each of that size */
     [VIRT_PLATFORM_BUS] =       { 0x0c000000, 0x02000000 },
@@ -1071,6 +1075,12 @@ static void create_virtio_devices(const VirtMachineState *vms)
     int i;
     hwaddr size = vms->memmap[VIRT_MMIO].size;
     MachineState *ms = MACHINE(vms);
+
+    /* Create NVIDIA BPMP guest passthru device, possibly need update ftd - WIP */
+    nvidia_bpmp_guest_create(vms->memmap[VIRT_NVIDIA_BPMP_GUEST].base);
+
+    /* Create NVIDIA GPIO guest passthru device, possibly need update ftd - WIP */
+    nvidia_gpio_guest_create(vms->memmap[VIRT_NVIDIA_GPIO_GUEST].base);
 
     /* We create the transports in forwards order. Since qbus_realize()
      * prepends (not appends) new child buses, the incrementing loop below will
