@@ -14,7 +14,6 @@ pkgs.stdenv.mkDerivation rec {
   buildInputs = with pkgs; [
     util-linux
     pkg-config
-    # mktemp
     autogen
     automake
     flex
@@ -107,7 +106,6 @@ pkgs.stdenv.mkDerivation rec {
     --disable-dbus-display \
     --enable-vnc --enable-vnc-jpeg \
     --disable-docs \
-    --docdir=./doc \
     --prefix=$out \
     --enable-vde \
     --enable-vhost-net --enable-vhost-user \

@@ -15,6 +15,9 @@ DECLARE_INSTANCE_CHECKER(NvidiaGpioGuestState, NVIDIA_GPIO_GUEST, TYPE_NVIDIA_GP
 // #define RETURN_OFF 0
 #define HOST_DEVICE_PATH "/dev/gpio-host"
 
+#define GPIO_PT_DEBUG
+// #define GPIO_PT_DEBUG_VERBOSE
+
 _Static_assert(sizeof(uint64_t) == RETURN_SIZE, "size assertion for RETURN_SIZE failed");
 _Static_assert(sizeof(uint64_t)*3 == MEM_SIZE, "size assertion for MEM_SIZE failed");
 _Static_assert(sizeof(uint64_t)*2 == RETURN_OFF, "size assertion for RETURN_OFF failed");
@@ -36,39 +39,15 @@ pthread_mutex_t return_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Device memory: 0x090c1000 +  /* Base address */
 
-/*
-static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int size)
-{
-	NvidiaGpioGuestState *s = opaque;
-
-	if (addr >= MEM_SIZE)
-		return 0xABEDFACE;
-
-	qemu_printf("%s: return: 0x%016lX, addr: 0x%lX, size: %d\n", __func__, *(uint64_t*)&s->mem[addr], addr, size);
-	// Cast buffer location as uint64_t
-	return *(uint64_t*)&s->mem[addr];
-}
-*/
-
-/*
-static inline ssize_t safe_read(int fd, void *buf, size_t count) {
-	ssize_t ret;
-	pthread_mutex_lock(&r_io_mutex);
-	ret = read(fd, buf, count);
-	pthread_mutex_unlock(&r_io_mutex);
-	return ret;
-}
-*/
-
 static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int size)
 {
 	struct NvidiaGpioGuestState *s = opaque;
 	uint64_t mask = ( size >= 8) ? (uint64_t)0xFFFFFFFFFFFFFFFF : ( (uint64_t)0x0000000000000001 << (size << 3) ) - 1;
 	uint64_t retval = ( s->return_value >> (addr<<3) ) & mask;
 
-	//#ifdef VERBOSE
+	#ifdef GPIO_PT_DEBUG_VERBOSE
 	qemu_printf("qemu: (   + read	 ) written: %d: addr: %ld, size: %d, return_value: 0x%016lX, retval: 0x%lX\n", s->written, addr, size, s->return_value, retval);
-	// #endif
+	#endif
 
 	s->written -= size;
 
@@ -86,22 +65,9 @@ static uint64_t nvidia_gpio_guest_read(void *opaque, hwaddr addr, unsigned int s
 
 	if ( s->written == 0 ) {
 		pthread_mutex_unlock(&return_mutex);	// allow next message
-		qemu_printf("qemu: (	 read	 ) ---unlocked--- return mutex\n");
 	}
 
-	// // Get the data from the host module
-	// // if(read(s->host_device_fd, s->mem + addr, size) < 0) {
-	// if((ret = safe_read(s->host_device_fd, s->return_buffer + addr, size)) < 0) {
-	//	qemu_printf("qemu: (in nvidia_gpio_guest_read) *error* read error %d, addr: 0x%lX, size %d\n", ret, addr, size);
-	// }
-	// else
-	// {
-	//	qemu_printf("qemu: (in nvidia_gpio_guest_read) return_value: 0x%08lX, addr: 0x%lX, size %d\n", s->return_value, addr, size);
-	// }
-
-	#ifdef VERBOSE
-	qemu_printf("qemu: (	read	 ) mask: 0x%lX, -------- retval(processed): 0x%016lX\n", mask, retval);
-	#else
+	#ifdef GPIO_PT_DEBUG_VERBOSE
 	qemu_printf("qemu: (	read	 ) retval(processed): 0x%lX\n", retval);
 	#endif
 	return retval;
@@ -134,19 +100,24 @@ static inline ssize_t safe_write(int fd, const void *buf, size_t count) {
 static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, unsigned int size)
 {
 	NvidiaGpioGuestState *s = opaque;
-	int ret = 0, i;
+	int ret = 0;
 	uint64_t mask;
+	#ifdef GPIO_PT_DEBUG_VERBOSE
+    int i;
+    #endif
 
 	if(addr == 0) {
 		s->length = (*(unsigned char *)&data & 0xFE) >> 1;		   // s->length is 7 top MSB bits in first byte
 		*(unsigned char *)&data = *(unsigned char *)&data & 0x01;	// remove lenght data from message
 		memset(s->mem, 0, s->length);
 		s->towrite = 0;
+	    #ifdef GPIO_PT_DEBUG_VERBOSE
 		// print debug
 		qemu_printf("qemu: ( +++ write +++ ) length (coded in msg): %d\n", s->length);
+        #endif
 	}
 
-	#ifdef VERBOSE
+	#ifdef GPIO_PT_DEBUG_VERBOSE
 	qemu_printf("qemu: (	 write	 ) addr: %ld, size: %d, data: 0x%016lX\n", addr, size, data);
 	#endif
 
@@ -162,17 +133,15 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 	// writeing last block
 	if(addr == s->length - size) {
 		// print debug
+	    #ifdef GPIO_PT_DEBUG_VERBOSE
 		qemu_printf("qemu: (	 write	 ) signal \'%c\', hexdump:\n", s->mem[1]);
 		for(i = 0; i < (s->towrite + 7)/8; i++)
 			qemu_printf("\t\t\t\t(%d) 0x%016lX\n", i, *((uint64_t *)(s->mem+i)));
+        #endif
 
-		#ifdef DEBUG_BLOCK
-		if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20 || s->mem[1] == '>' ) { // debug: block writel
-		#else
 		if( s->length > 0x18 || s->mem[0]&0xFE || s->mem[1] >= 0x80 || s->mem[1] < 0x20) { // block obvious errors only
-		#endif
 			s->return_value = 0xDEAFFACE;
-			qemu_printf("signal \'%c\' was blocked (chip=%d)\n", s->mem[1], s->mem[0]);
+			qemu_printf("%s: **Error** signal \'%c\' was blocked (chip=%d)\n", __func__, s->mem[1], s->mem[0]);
 		}
 		else {
 
@@ -182,8 +151,10 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 			}
 
 			pthread_mutex_lock(&return_mutex);
+	        #ifdef GPIO_PT_DEBUG_VERBOSE
 			qemu_printf("qemu: (	 write	 ) +++locked+++ return mutex\n");
 			qemu_printf("qemu: (	 write	 ) Ready to write, (%d)\n", s->towrite);
+            #endif
 			if ( (ret = safe_write(s->host_device_fd, s->mem, s->towrite)) < 0 )
 			{
 				// error in write()
@@ -191,21 +162,26 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 				s->return_value = 0x1BADFACE;
 				s->written = 0;
 				pthread_mutex_unlock(&return_mutex);	// allow next message
-				qemu_printf("qemu: (	 write	 ) ---unlocked--- return mutex @error\n");
 			}
 			else {
+                #ifdef GPIO_PT_DEBUG
 				qemu_printf("qemu: **Success** writing (%d) signal \'%c\' to the host device\n", ret, s->mem[1]);
+                #endif
 				// in addition to written length, 'ret' contains also the count of returned bytes appended to the end of the buffer
 				// note: the size of the return value is (s->written - RETURN_OFF), should be 4 or 8 bytes
 				s->written = ret;		   // update 'written' to actually written bytes ('ret'|| may be altered by host's return value)
 				s->written -= RETURN_OFF;   // begin to handle return, subtract return offset to get expected return size
 				if ( s->written > 0 && s->written <= RETURN_SIZE ) {
 					// a return value is available
+	                #ifdef GPIO_PT_DEBUG_VERBOSE
 					qemu_printf("qemu: (	 write	 ) Expected return size: %d\n", s->written);
+                    #endif
 					// note: shift left does not work when we shift 64 bits (8 bytes) because the '1' is lost at 65 bits
 					mask = ( s->written >= 8) ? (uint64_t)0xFFFFFFFFFFFFFFFF : ( (uint64_t)0x0000000000000001 << (s->written << 3) ) - 1;
 					s->return_value = *(uint64_t *)(s->mem + RETURN_OFF) & mask;
+	                #ifdef GPIO_PT_DEBUG_VERBOSE
 					qemu_printf("qemu: (	 write	 ) Return value 0x%016lX, is copied from raw 0x%016lX, with mask = 0x%016lX\n", s->return_value, *(uint64_t *)(s->mem + RETURN_OFF), mask);
+                    #endif
 				}
 				else {
 					// no return value
@@ -215,13 +191,14 @@ static void nvidia_gpio_guest_write(void *opaque, hwaddr addr, uint64_t data, un
 						s->return_value = 0x2BADFACE;
 					}
 					pthread_mutex_unlock(&return_mutex);	// allow next message
-					qemu_printf("qemu: (	 write	 ) ---unlocked--- return mutex\n");
 				}
 			}
 
 		} // close error check
 
+        #ifdef GPIO_PT_DEBUG
 		qemu_printf("qemu: (	 write --- ) return_value: 0x%016lX\n", s->return_value);
+        #endif
 	}
 	return;
 }
@@ -245,7 +222,7 @@ static void nvidia_gpio_guest_instance_init(Object *obj)
 
 	if (s->host_device_fd < 0)
 	{
-		qemu_printf("%s: Failed to open the host device..\n", __func__);
+		qemu_printf("%s: **Error** Failed to open the host device..\n", __func__);
 		return;
 	}
 }
