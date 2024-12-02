@@ -1,0 +1,32 @@
+./configure \
+        --target-list=aarch64-softmmu \
+        --enable-kvm \
+        --enable-debug-info \
+        --disable-strip \
+        --disable-docs \
+        --disable-spice \
+        --enable-tools \
+        --localstatedir=/var \
+        --sysconfdir=/etc \
+        --enable-guest-agent \
+        --enable-numa \
+        --enable-seccomp \
+        --enable-smartcard \
+        --enable-usb-redir \
+        --enable-linux-aio \
+        --enable-tpm \
+        --enable-libiscsi \
+        --enable-linux-io-uring \
+        --enable-canokey \
+        --enable-capstone \
+        --enable-virtfs \
+        --enable-gtk \
+        --enable-opengl \
+        --enable-virglrenderer \
+        --enable-sdl \
+        --enable-vnc \
+        --enable-vnc-jpeg \
+        --enable-vde \
+        --enable-vhost-net \
+        --enable-vhost-user
+        
